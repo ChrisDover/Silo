@@ -244,16 +244,11 @@ function loadSkillMessage(toolConfig) {
   return toolConfig.initMessage || null;
 }
 
-function readProjectFileForContext(projectPath, fileName, maxChars) {
-  try {
-    const filePath = path.join(projectPath, fileName);
-    const stat = fs.lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) return null;
-    const text = fs.readFileSync(filePath, "utf-8").slice(0, maxChars);
-    return `--- ${fileName} ---\n${text}`;
-  } catch (_) {
-    return null;
-  }
+function preparePtyStartupPrompt(text) {
+  return String(text)
+    .replace(/[\r\n\t]+/g, " | ")
+    .replace(/\s{2,}/g, " ")
+    .slice(0, 5500);
 }
 
 function listProjectFilesForContext(projectPath) {
@@ -318,14 +313,8 @@ function buildLocalContextMessage(projectPath, projectName, toolConfig) {
   const fileList = listProjectFilesForContext(safePath);
   if (fileList) parts.push(`Top project files:\n${fileList}`);
 
-  const contextFiles = ["README.md", "AGENTS.md", "CLAUDE.md", "package.json", "pyproject.toml"];
-  const snippets = contextFiles
-    .map((fileName) => readProjectFileForContext(safePath, fileName, 3500))
-    .filter(Boolean);
-  if (snippets.length) parts.push(`Project snippets:\n${snippets.join("\n\n")}`);
-
-  parts.push('Reply with "Silo local context loaded." Then give the user the next practical step.');
-  return parts.join("\n\n").slice(0, 16000);
+  parts.push('Reply only: "Silo local context loaded." Then wait.');
+  return parts.join("\n\n");
 }
 
 function listSkills() {
@@ -458,7 +447,7 @@ function spawnPty(sessionId, projectPath, toolKey, projectName) {
 
   // Load skill/init text and local context after the tool starts.
   const initParts = [loadSkillMessage(toolConfig), buildLocalContextMessage(safePath, projectName, toolConfig)].filter(Boolean);
-  const initMsg = initParts.join("\n\n");
+  const initMsg = preparePtyStartupPrompt(initParts.join("\n\n"));
   if (initMsg) {
     setTimeout(() => {
       if (ptyProc.pid) {

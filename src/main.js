@@ -154,6 +154,24 @@ function getBundledConfigPath() {
   return path.join(__dirname, "..", "silo.config.json");
 }
 
+function mergeConfigDefaults(userCfg, bundledCfg) {
+  const merged = {
+    ...bundledCfg,
+    ...userCfg,
+    terminal: { ...(bundledCfg.terminal || {}), ...(userCfg.terminal || {}) },
+    localModel: { ...(bundledCfg.localModel || {}), ...(userCfg.localModel || {}) },
+    cloud: { ...(bundledCfg.cloud || {}), ...(userCfg.cloud || {}) },
+    performance: { ...(bundledCfg.performance || {}), ...(userCfg.performance || {}) },
+    tools: { ...(bundledCfg.tools || {}) },
+  };
+
+  for (const [key, tool] of Object.entries(userCfg.tools || {})) {
+    merged.tools[key] = { ...((bundledCfg.tools || {})[key] || {}), ...tool };
+  }
+
+  return merged;
+}
+
 function loadConfig() {
   const userPath = getUserConfigPath();
   const bundledPath = getBundledConfigPath();
@@ -165,9 +183,13 @@ function loadConfig() {
     } catch (_) {}
   }
 
-  const configPath = fs.existsSync(userPath) ? userPath : bundledPath;
-  const raw = fs.readFileSync(configPath, "utf-8");
-  const cfg = JSON.parse(raw);
+  const bundledCfg = fs.existsSync(bundledPath)
+    ? JSON.parse(fs.readFileSync(bundledPath, "utf-8"))
+    : {};
+  const userCfg = fs.existsSync(userPath)
+    ? JSON.parse(fs.readFileSync(userPath, "utf-8"))
+    : {};
+  const cfg = fs.existsSync(userPath) ? mergeConfigDefaults(userCfg, bundledCfg) : bundledCfg;
 
   if (cfg.tools) {
     for (const [key, tool] of Object.entries(cfg.tools)) {
@@ -220,6 +242,90 @@ function loadSkillMessage(toolConfig) {
     if (content) return content;
   }
   return toolConfig.initMessage || null;
+}
+
+function readProjectFileForContext(projectPath, fileName, maxChars) {
+  try {
+    const filePath = path.join(projectPath, fileName);
+    const stat = fs.lstatSync(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    const text = fs.readFileSync(filePath, "utf-8").slice(0, maxChars);
+    return `--- ${fileName} ---\n${text}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+function listProjectFilesForContext(projectPath) {
+  const ignored = new Set([".git", "node_modules", "dist", "out", "build", ".next", ".venv", "venv"]);
+  const lines = [];
+
+  function visit(dir, prefix, depth) {
+    if (lines.length >= 80 || depth > 1) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (lines.length >= 80) break;
+      if (entry.name.startsWith(".") && entry.name !== ".github") continue;
+      if (ignored.has(entry.name)) continue;
+      const rel = path.join(prefix, entry.name);
+      const full = path.join(dir, entry.name);
+      try {
+        if (fs.lstatSync(full).isSymbolicLink()) continue;
+      } catch (_) {
+        continue;
+      }
+      lines.push(entry.isDirectory() ? `${rel}/` : rel);
+      if (entry.isDirectory()) visit(full, rel, depth + 1);
+    }
+  }
+
+  visit(projectPath, "", 0);
+  return lines.join("\n");
+}
+
+function getGitStatusForContext(projectPath) {
+  try {
+    return execFileSync("git", ["-C", projectPath, "status", "--short"], {
+      encoding: "utf-8",
+      timeout: 2000,
+      maxBuffer: 32 * 1024,
+    }).trim();
+  } catch (_) {
+    return "";
+  }
+}
+
+function buildLocalContextMessage(projectPath, projectName, toolConfig) {
+  if (!toolConfig.localContext) return null;
+  const safePath = sanitizePath(projectPath);
+  const parts = [
+    "Silo startup context:",
+    `Project: ${String(projectName).slice(0, 100)}`,
+    `Path: ${safePath}`,
+    "Runtime: local Ollama model launched inside a Silo PTY.",
+    "Access boundary: you cannot inspect files directly. Use only this context unless the user provides more text or escalates to a tool agent.",
+  ];
+
+  const gitStatus = getGitStatusForContext(safePath);
+  parts.push(`Git status:\n${gitStatus || "clean or unavailable"}`);
+
+  const fileList = listProjectFilesForContext(safePath);
+  if (fileList) parts.push(`Top project files:\n${fileList}`);
+
+  const contextFiles = ["README.md", "AGENTS.md", "CLAUDE.md", "package.json", "pyproject.toml"];
+  const snippets = contextFiles
+    .map((fileName) => readProjectFileForContext(safePath, fileName, 3500))
+    .filter(Boolean);
+  if (snippets.length) parts.push(`Project snippets:\n${snippets.join("\n\n")}`);
+
+  parts.push('Reply with "Silo local context loaded." Then give the user the next practical step.');
+  return parts.join("\n\n").slice(0, 16000);
 }
 
 function listSkills() {
@@ -350,8 +456,9 @@ function spawnPty(sessionId, projectPath, toolKey, projectName) {
     }
   }, 800);
 
-  // Load skill file or initMessage and send after tool starts
-  const initMsg = loadSkillMessage(toolConfig);
+  // Load skill/init text and local context after the tool starts.
+  const initParts = [loadSkillMessage(toolConfig), buildLocalContextMessage(safePath, projectName, toolConfig)].filter(Boolean);
+  const initMsg = initParts.join("\n\n");
   if (initMsg) {
     setTimeout(() => {
       if (ptyProc.pid) {

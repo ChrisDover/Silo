@@ -56,7 +56,9 @@
       "command": "ollama run gemma4",
       "icon": "◆",
       "color": "#60a5fa",
-      "description": "Local-first model for planning, summaries, and low-cost supervision"
+      "description": "Local-first model for planning, summaries, and low-cost supervision",
+      "skill": "gemma-local",
+      "localContext": true
     },
     "claude": {
       "label": "Claude Code",

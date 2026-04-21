@@ -103,6 +103,8 @@ Worktree sessions show extra actions:
 
 Drop markdown files into `skills/` and reference them from a tool entry via `"skill": "name"`. The skill content is prepended to the first prompt in that session.
 
+The default Gemma tool uses `skills/gemma-local.md` plus a Silo-generated startup context packet. This makes the local Ollama model explicit about its real boundary: Gemma is running locally, but a raw Ollama model cannot browse or edit your filesystem by itself. Silo provides a bounded snapshot with project path, git status, top files, and key snippets so Gemma can supervise cheaply. Use Codex or Claude Code escalation when the work needs live file reads, edits, tests, or commits.
+
 ## Security
 
 Silo scrubs well-known secret patterns from persisted scrollback and clipboard history:

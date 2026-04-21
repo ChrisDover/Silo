@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/Release/
+out/
+*.tar.gz
+.DS_Store
+.env
+.env.*
+*.log
+.vscode/
+.idea/
+.claude/

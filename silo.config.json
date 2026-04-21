@@ -1,0 +1,62 @@
+{
+  "scanDirs": ["~/dev", "~/projects", "~/code"],
+  "pinned": [
+    {
+      "name": "example-web",
+      "path": "~/dev/example-web",
+      "icon": "🌐",
+      "desc": "Example web project",
+      "defaultTool": "claude"
+    },
+    {
+      "name": "example-api",
+      "path": "~/dev/example-api",
+      "icon": "🔌",
+      "desc": "Example API service",
+      "defaultTool": "claude"
+    },
+    {
+      "name": "example-ml",
+      "path": "~/dev/example-ml",
+      "icon": "🧪",
+      "desc": "Example ML / research project",
+      "defaultTool": "claude"
+    },
+    {
+      "name": "silo",
+      "path": "~/dev/silo",
+      "icon": "◧",
+      "desc": "AI coding terminal",
+      "defaultTool": "claude"
+    }
+  ],
+  "tools": {
+    "claude": {
+      "label": "Claude Code",
+      "command": "claude",
+      "icon": "◈",
+      "color": "#d97706",
+      "description": "Anthropic's agentic coding assistant"
+    },
+    "codex": {
+      "label": "Codex CLI",
+      "command": "codex",
+      "icon": "◉",
+      "color": "#22c55e",
+      "description": "OpenAI's coding agent"
+    },
+    "autoresearch": {
+      "label": "AutoResearch",
+      "command": "claude",
+      "icon": "🔬",
+      "color": "#f59e0b",
+      "description": "Autonomous ML experiment loop (Karpathy)",
+      "skill": "autoresearch"
+    }
+  },
+  "terminal": {
+    "fontSize": 13,
+    "fontFamily": "JetBrains Mono, Fira Code, SF Mono, monospace",
+    "scrollback": 10000
+  }
+}

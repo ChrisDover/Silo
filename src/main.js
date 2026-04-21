@@ -258,6 +258,35 @@ const sessionRuntime = new Map();    // sessionId -> runtime health data
 let activeTabId = null;              // which session the renderer is currently showing
 let monitorTimer = null;
 
+function logPath() {
+  return path.join(app.getPath("userData"), "silo.log");
+}
+
+function logEvent(level, message, details) {
+  try {
+    const line = JSON.stringify({
+      t: new Date().toISOString(),
+      level,
+      message,
+      details: details || null,
+    });
+    fs.appendFileSync(logPath(), `${line}\n`, { mode: 0o600 });
+  } catch (err) {
+    console.error("silo log failed", err);
+  }
+}
+
+process.on("uncaughtException", (err) => {
+  logEvent("error", "uncaughtException", { message: err.message, stack: err.stack });
+});
+
+process.on("unhandledRejection", (err) => {
+  logEvent("error", "unhandledRejection", {
+    message: err && err.message ? err.message : String(err),
+    stack: err && err.stack ? err.stack : null,
+  });
+});
+
 // ---------------------------------------------------------------------------
 // PTY helpers
 // ---------------------------------------------------------------------------
@@ -511,6 +540,17 @@ function createMainWindow() {
 
   mainWindow.webContents.on("will-navigate", (e) => e.preventDefault());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("render-process-gone", (_e, details) => {
+    logEvent("error", "render-process-gone", details);
+  });
+  mainWindow.webContents.on("console-message", (_e, level, message, line, sourceId) => {
+    if (level >= 2) {
+      logEvent("renderer", "console-message", { level, message, line, sourceId });
+    }
+  });
+  mainWindow.webContents.on("did-fail-load", (_e, errorCode, errorDescription, validatedURL) => {
+    logEvent("error", "did-fail-load", { errorCode, errorDescription, validatedURL });
+  });
 
   mainWindow.loadFile(path.join(__dirname, "index.html"));
 
@@ -524,6 +564,14 @@ function createMainWindow() {
     sessionRuntime.clear();
     mainWindow = null;
     activeTabId = null;
+  });
+
+  logEvent("info", "main-window-created", {
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    platform: process.platform,
+    arch: process.arch,
   });
 
   return mainWindow;
@@ -1008,6 +1056,19 @@ ipcMain.handle("pty:restart", (_e, sessionId, toolKey) => {
 // App lifecycle
 // ---------------------------------------------------------------------------
 app.whenReady().then(() => {
+  logEvent("info", "app-ready");
+
+  app.on("render-process-gone", (_event, webContents, details) => {
+    logEvent("error", "app-render-process-gone", {
+      url: webContents && !webContents.isDestroyed() ? webContents.getURL() : null,
+      details,
+    });
+  });
+
+  app.on("child-process-gone", (_event, details) => {
+    logEvent("error", "child-process-gone", details);
+  });
+
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => {
     cb(perm === "clipboard-read");
   });
@@ -1031,6 +1092,7 @@ app.whenReady().then(() => {
 });
 
 app.on("before-quit", () => {
+  logEvent("info", "before-quit");
   flushAllSessions();
   if (monitorTimer) clearInterval(monitorTimer);
 });

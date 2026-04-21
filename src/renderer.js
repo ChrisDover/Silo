@@ -10,8 +10,10 @@
   let fitAddon = null;
   let cleanupPtyData = null;
   let cleanupPtyExit = null;
+  let cleanupStatus = null;
   let saveTimer = null;
   let elapsedTimer = null;
+  const sessionStatuses = new Map();
 
   // Active tab state
   let activeTabId = null;
@@ -94,6 +96,60 @@
       .replace(/"/g, "&quot;");
   }
 
+  function statusMeta(status) {
+    const state = (status && status.health && status.health.state) || (status && status.running ? "running" : "idle");
+    const labels = {
+      running: ["Running", "green"],
+      blocked: ["Blocked", "yellow"],
+      failed: ["Failed", "red"],
+      dead: ["Dead", "muted"],
+      idle: ["Idle", "muted"],
+      hot: ["Hot", "yellow"],
+      review: ["Review", "green"],
+    };
+    return labels[state] || [state, "muted"];
+  }
+
+  function getLiveStatus(id) {
+    const tab = openTabs.get(id);
+    return sessionStatuses.get(id) || (tab && tab.session && tab.session.status) || null;
+  }
+
+  function renderActiveStatus() {
+    if (!activeTabId) return;
+    const status = getLiveStatus(activeTabId);
+    const healthEl = document.getElementById("status-health");
+    const resourceEl = document.getElementById("status-resource");
+    const gitEl = document.getElementById("status-git");
+    if (!status) {
+      if (healthEl) healthEl.textContent = "unknown";
+      if (resourceEl) resourceEl.textContent = "CPU 0% · MEM 0MB";
+      if (gitEl) gitEl.textContent = "git unknown";
+      return;
+    }
+    const [label, tone] = statusMeta(status);
+    if (healthEl) {
+      healthEl.textContent = label.toLowerCase();
+      healthEl.className = `status-health tone-${tone}`;
+    }
+    if (resourceEl) {
+      const resource = status.resource || {};
+      const procText = resource.processes ? ` · ${resource.processes} proc` : "";
+      resourceEl.textContent = `CPU ${resource.cpu || 0}% · MEM ${resource.memMb || 0}MB${procText}`;
+      const top = (resource.top || [])
+        .map((p) => `${p.command}: ${p.cpu}% / ${p.memMb}MB`)
+        .join("\n");
+      resourceEl.title = top || "No child process detail yet";
+    }
+    if (gitEl) {
+      const git = status.git || {};
+      gitEl.textContent = git.ok
+        ? (git.changed ? `${git.changed} files +${git.insertions || 0} -${git.deletions || 0}` : "git clean")
+        : "git n/a";
+      gitEl.title = git.summary || "";
+    }
+  }
+
   // ── Debounced auto-save ────────────────────────────────────────────────
   function scheduleSave() {
     if (!activeTabId) return;
@@ -147,13 +203,15 @@
       const color = toolCfg.color || "#6b7280";
       const icon = sess.project.icon || toolCfg.icon || "◧";
       const isActive = id === activeTabId;
+      const status = getLiveStatus(id);
+      const [, tone] = statusMeta(status);
 
       const el = document.createElement("div");
       el.className = `side-tab${isActive ? " active" : ""}`;
       el.dataset.id = id;
       el.innerHTML = `
         <span class="side-tab-icon" style="color:${color}">${icon}</span>
-        <span class="side-tab-status${tab.exited ? " exited" : ""}"></span>
+        <span class="side-tab-status ${tone}${tab.exited ? " exited" : ""}"></span>
         <button class="side-tab-close" data-close="${id}">✕</button>
         <div class="side-tab-tooltip">
           <div class="side-tab-tooltip-name">${escapeHtml(sess.project.name)}</div>
@@ -242,9 +300,10 @@
     // Header
     document.getElementById("term-project-name").textContent = sess.project.name;
     const badge = document.getElementById("term-tool-badge");
-    badge.textContent = toolCfg.label || sess.tool;
+    badge.textContent = `${toolCfg.label || sess.tool}${sess.worktree && sess.worktree.enabled ? " · WT" : ""}`;
     badge.style.background = `${toolCfg.color || "#6b7280"}20`;
     badge.style.color = toolCfg.color || "#6b7280";
+    renderWorktreeActions(sess);
 
     // Status bar
     document.getElementById("status-project").textContent = sess.project.name;
@@ -281,6 +340,7 @@
 
     // Clipboard rail
     renderClipRail();
+    renderActiveStatus();
 
     term.focus();
   }
@@ -406,6 +466,21 @@
     setupDragDrop();
   }
 
+  function renderWorktreeActions(sess) {
+    const isWorktree = Boolean(sess && sess.worktree && sess.worktree.enabled);
+    document.querySelectorAll(".wt-action").forEach((btn) => {
+      btn.classList.toggle("hidden", !isWorktree);
+    });
+    const keepBtn = document.getElementById("btn-keep-worktree");
+    const mergeBtn = document.getElementById("btn-merge-worktree");
+    if (keepBtn && isWorktree) {
+      keepBtn.textContent = sess.worktree.kept ? "Kept WT" : "Keep WT";
+    }
+    if (mergeBtn && isWorktree) {
+      mergeBtn.textContent = sess.worktree.merged ? "Merged WT" : "Merge WT";
+    }
+  }
+
   // ── Status bar ─────────────────────────────────────────────────────────
   function updateStatusCounts() {
     const cmdsEl = document.getElementById("status-cmds");
@@ -522,6 +597,10 @@
 
     const sessions = await window.silo.listSessions();
     const activeTabs = await window.silo.listActiveTabs();
+    sessions.forEach((s) => {
+      if (s.status) sessionStatuses.set(s.id, s.status);
+    });
+    renderMissionSummary(sessions);
 
     const searchWrap = document.getElementById("manager-search-wrap");
     const searchInput = document.getElementById("manager-search");
@@ -553,13 +632,31 @@
           const isRunning = activeTabs.includes(s.id);
           const displayName = s.label || s.project.name;
           const preview = s.preview ? escapeHtml(s.preview) : "";
+          const status = sessionStatuses.get(s.id) || s.status;
+          const [statusLabel, statusTone] = statusMeta(status);
+          const resource = (status && status.resource) || {};
+          const git = (status && status.git) || {};
+          const cloudUsd = ((s.cloudCents || 0) / 100).toFixed(2);
+          const procText = resource.processes ? `${resource.processes} proc` : "0 proc";
+          const gitBadge = git.ok && git.changed
+            ? `<span class="state-pill tone-green">${git.changed} files</span>`
+            : "";
+          const worktreeBadge = s.worktree && s.worktree.enabled
+            ? '<span class="state-pill tone-green">WT</span>'
+            : "";
           return `<div class="session-row" data-id="${s.id}">
             <div class="session-icon">${s.project.icon || "◧"}</div>
             <div class="session-info">
               <div class="session-name">${escapeHtml(displayName)}${s.label ? ` <span style="color:var(--text-3);font-weight:400;font-size:11px">${escapeHtml(s.project.name)}</span>` : ""}</div>
               <div class="session-meta">
                 <span class="session-tool-badge" style="background:${badgeColor}20;color:${badgeColor}">${toolCfg.label || s.tool}</span>
-                <span>${s.cmds} cmds</span>
+                ${worktreeBadge}
+                ${gitBadge}
+                <span class="state-pill tone-${statusTone}">${statusLabel}</span>
+                <span>${resource.cpu || 0}% CPU</span>
+                <span>${resource.memMb || 0}MB</span>
+                <span>${procText}</span>
+                <span>$${cloudUsd}</span>
                 <span>${readableTime(s.savedAt || s.t0)}</span>
                 ${isRunning ? '<span style="color:var(--green)">● running</span>' : ""}
               </div>
@@ -608,6 +705,57 @@
     renderList("");
     searchInput.value = "";
     searchInput.oninput = () => renderList(searchInput.value);
+  }
+
+  function renderMissionSummary(sessions) {
+    const el = document.getElementById("mission-summary");
+    if (!el) return;
+    const counts = {
+      running: 0,
+      blocked: 0,
+      failed: 0,
+      dead: 0,
+      hot: 0,
+      idle: 0,
+    };
+    let cpu = 0;
+    let mem = 0;
+    let cloudCents = 0;
+    sessions.forEach((s) => {
+      const status = sessionStatuses.get(s.id) || s.status || {};
+      const state = (status.health && status.health.state) || (status.running ? "running" : "idle");
+      counts[state] = (counts[state] || 0) + 1;
+      cpu += (status.resource && status.resource.cpu) || 0;
+      mem += (status.resource && status.resource.memMb) || 0;
+      cloudCents += s.cloudCents || 0;
+    });
+    const localModel = (config && config.localModel) || {};
+    el.innerHTML = `
+      <div class="mission-card">
+        <span class="mission-label">Local</span>
+        <span class="mission-value">${escapeHtml(localModel.model || "gemma4")}</span>
+      </div>
+      <div class="mission-card">
+        <span class="mission-label">Running</span>
+        <span class="mission-value">${counts.running || 0}</span>
+      </div>
+      <div class="mission-card ${counts.blocked ? "attention" : ""}">
+        <span class="mission-label">Blocked</span>
+        <span class="mission-value">${counts.blocked || 0}</span>
+      </div>
+      <div class="mission-card ${counts.failed || counts.dead ? "attention" : ""}">
+        <span class="mission-label">Needs You</span>
+        <span class="mission-value">${(counts.failed || 0) + (counts.dead || 0)}</span>
+      </div>
+      <div class="mission-card ${counts.hot ? "attention" : ""}">
+        <span class="mission-label">Load</span>
+        <span class="mission-value">${Math.round(cpu)}% · ${Math.round(mem)}MB</span>
+      </div>
+      <div class="mission-card">
+        <span class="mission-label">Cloud</span>
+        <span class="mission-value">$${(cloudCents / 100).toFixed(2)}</span>
+      </div>
+    `;
   }
 
   // Open or switch to a session
@@ -760,6 +908,8 @@
     config = config || (await window.silo.getConfig());
     const subtitle = document.getElementById("tool-subtitle");
     subtitle.textContent = `for ${selectedProject.icon || ""} ${selectedProject.name}`;
+    const worktreeToggle = document.getElementById("launch-worktree");
+    if (worktreeToggle) worktreeToggle.checked = false;
 
     const list = document.getElementById("tool-list");
     list.innerHTML = Object.entries(config.tools)
@@ -781,9 +931,11 @@
   }
 
   async function launchSession(toolKey) {
+    const worktreeToggle = document.getElementById("launch-worktree");
     const sess = await window.silo.createSession({
       project: selectedProject,
       tool: toolKey,
+      worktree: Boolean(worktreeToggle && worktreeToggle.checked),
     });
 
     openTabs.set(sess.id, {
@@ -794,6 +946,9 @@
       cmdCount: 0,
       exited: false,
     });
+    if (sess.worktree && sess.worktree.error && term) {
+      term.write(`\r\n\x1b[33m[worktree] ${sess.worktree.error}; launched in source checkout\x1b[0m\r\n`);
+    }
 
     renderSideTabs();
     await switchToTab(sess.id);
@@ -870,6 +1025,140 @@
     await window.silo.restartPty(activeTabId, tab.session.tool);
   });
 
+  document.getElementById("btn-doctor").addEventListener("click", async () => {
+    if (!activeTabId || !term) return;
+    term.write("\r\n\x1b[2m[gemma] checking session state...\x1b[0m\r\n");
+    try {
+      const result = await window.silo.askDoctor(activeTabId);
+      term.write(`\r\n\x1b[36m${result.replace(/\n/g, "\r\n")}\x1b[0m\r\n`);
+    } catch (err) {
+      term.write(`\r\n\x1b[31m[gemma] ${err.message || "local supervisor failed"}\x1b[0m\r\n`);
+    }
+  });
+
+  async function copyContextPacket(label) {
+    if (!activeTabId) return null;
+    const packet = await window.silo.buildContextPacket(activeTabId, "ask before spending");
+    await navigator.clipboard.writeText(packet);
+    if (term) {
+      term.write(`\r\n\x1b[2m[context] copied ${packet.length} chars for ${label || "handoff"}\x1b[0m\r\n`);
+    }
+    return packet;
+  }
+
+  async function sendEscalation(toolKey, label) {
+    if (!activeTabId || !term) return;
+    const tab = openTabs.get(activeTabId);
+    if (!tab) return;
+    const packet = await copyContextPacket(label);
+    if (!packet) return;
+    term.write(`\r\n\x1b[2m[cloud] launching ${label}; paste is ready if the CLI asks for context\x1b[0m\r\n`);
+    await window.silo.restartPty(activeTabId, toolKey);
+    tab.session.tool = toolKey;
+    tab.exited = false;
+    setupTerminalForTab(activeTabId);
+    renderSideTabs();
+  }
+
+  document.getElementById("btn-context-packet").addEventListener("click", async () => {
+    try {
+      await copyContextPacket("cloud review");
+    } catch (err) {
+      if (term) term.write(`\r\n\x1b[31m[context] ${err.message || "copy failed"}\x1b[0m\r\n`);
+    }
+  });
+
+  document.getElementById("btn-review-diff").addEventListener("click", async () => {
+    if (!activeTabId || !term) return;
+    try {
+      const diff = await window.silo.getDiffPreview(activeTabId);
+      await navigator.clipboard.writeText(diff);
+      term.write(`\r\n\x1b[2m[diff] copied ${diff.length} chars to clipboard\x1b[0m\r\n`);
+      term.write(`\r\n\x1b[32m${diff.replace(/\n/g, "\r\n").slice(0, 4000)}\x1b[0m\r\n`);
+    } catch (err) {
+      term.write(`\r\n\x1b[31m[diff] ${err.message || "diff unavailable"}\x1b[0m\r\n`);
+    }
+  });
+
+  document.getElementById("btn-open-worktree").addEventListener("click", async () => {
+    if (!activeTabId || !term) return;
+    try {
+      await window.silo.openWorktree(activeTabId);
+      term.write("\r\n\x1b[2m[worktree] opened isolated worktree\x1b[0m\r\n");
+    } catch (err) {
+      term.write(`\r\n\x1b[31m[worktree] ${err.message || "open failed"}\x1b[0m\r\n`);
+    }
+  });
+
+  document.getElementById("btn-keep-worktree").addEventListener("click", async () => {
+    if (!activeTabId || !term) return;
+    try {
+      const worktree = await window.silo.keepWorktree(activeTabId);
+      const tab = openTabs.get(activeTabId);
+      if (tab && tab.session) tab.session.worktree = worktree;
+      renderWorktreeActions(tab && tab.session);
+      term.write("\r\n\x1b[2m[worktree] marked to keep\x1b[0m\r\n");
+    } catch (err) {
+      term.write(`\r\n\x1b[31m[worktree] ${err.message || "keep failed"}\x1b[0m\r\n`);
+    }
+  });
+
+  document.getElementById("btn-merge-worktree").addEventListener("click", async () => {
+    if (!activeTabId || !term) return;
+    const tab = openTabs.get(activeTabId);
+    if (!confirm("Merge this worktree branch into the source checkout? Silo will refuse if the source checkout is dirty or if git reports a conflict.")) return;
+    try {
+      const result = await window.silo.mergeWorktree(activeTabId);
+      if (tab && tab.session && tab.session.worktree) {
+        tab.session.worktree.merged = true;
+        tab.session.worktree.mergedAt = result.mergedAt;
+      }
+      renderWorktreeActions(tab && tab.session);
+      term.write(`\r\n\x1b[2m[worktree] merged ${result.branch} into source checkout\x1b[0m\r\n`);
+    } catch (err) {
+      term.write(`\r\n\x1b[31m[worktree] ${err.message || "merge failed"}\x1b[0m\r\n`);
+    }
+  });
+
+  document.getElementById("btn-delete-worktree").addEventListener("click", async () => {
+    if (!activeTabId || !term) return;
+    const tab = openTabs.get(activeTabId);
+    const git = getLiveStatus(activeTabId) && getLiveStatus(activeTabId).git;
+    const changed = git && git.ok && git.changed > 0;
+    const msg = changed
+      ? `Delete this worktree? It has ${git.changed} changed files. Commit, stash, or discard them first if git refuses.`
+      : "Delete this isolated worktree?";
+    if (!confirm(msg)) return;
+    try {
+      const worktree = await window.silo.deleteWorktree(activeTabId);
+      if (tab && tab.session) {
+        tab.session.worktree = worktree;
+        if (worktree.sourcePath) tab.session.project.path = worktree.sourcePath;
+      }
+      renderWorktreeActions(tab && tab.session);
+      renderSideTabs();
+      term.write("\r\n\x1b[2m[worktree] deleted and session stopped\x1b[0m\r\n");
+    } catch (err) {
+      term.write(`\r\n\x1b[31m[worktree] ${err.message || "delete failed"}\x1b[0m\r\n`);
+    }
+  });
+
+  document.getElementById("btn-send-codex").addEventListener("click", async () => {
+    try {
+      await sendEscalation("codex", "Codex");
+    } catch (err) {
+      if (term) term.write(`\r\n\x1b[31m[codex] ${err.message || "launch failed"}\x1b[0m\r\n`);
+    }
+  });
+
+  document.getElementById("btn-send-claude").addEventListener("click", async () => {
+    try {
+      await sendEscalation("claude", "Claude");
+    } catch (err) {
+      if (term) term.write(`\r\n\x1b[31m[claude] ${err.message || "launch failed"}\x1b[0m\r\n`);
+    }
+  });
+
   document.getElementById("btn-export").addEventListener("click", async () => {
     if (!activeTabId) return;
     await window.silo.exportSession(activeTabId);
@@ -919,5 +1208,10 @@
   });
 
   // ── Init ───────────────────────────────────────────────────────────────
+  cleanupStatus = window.silo.onSessionStatus((sessionId, status) => {
+    sessionStatuses.set(sessionId, status);
+    renderSideTabs();
+    renderActiveStatus();
+  });
   renderHome();
 })();

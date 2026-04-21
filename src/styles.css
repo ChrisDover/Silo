@@ -6,19 +6,19 @@
   --bg-2: #10101c;
   --bg-3: #161628;
   --border: #1a1a2e;
-  --border-hi: #3b82f620;
-  --text-0: #e2e4e9;
-  --text-1: #9ca3af;
-  --text-2: #6b7280;
-  --text-3: #374151;
-  --text-4: #252536;
-  --accent: #3b82f6;
-  --accent-dim: #3b82f612;
+  --border-hi: #22c55e66;
+  --text-0: #ffffff;
+  --text-1: #ffffff;
+  --text-2: #22c55e;
+  --text-3: #22c55e;
+  --text-4: #22c55e;
+  --accent: #22c55e;
+  --accent-dim: #22c55e18;
   --green: #22c55e;
-  --yellow: #eab308;
-  --red: #ef4444;
-  --purple: #a78bfa;
-  --orange: #d97706;
+  --yellow: #22c55e;
+  --red: #ffffff;
+  --purple: #22c55e;
+  --orange: #22c55e;
   --font: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
   --sidebar-w: 52px;
 }
@@ -139,6 +139,10 @@ body {
   border-radius: 50%;
   background: var(--green);
 }
+.side-tab-status.green { background: var(--green); }
+.side-tab-status.yellow { background: var(--green); }
+.side-tab-status.red { background: var(--green); }
+.side-tab-status.muted,
 .side-tab-status.exited { background: var(--text-3); }
 
 /* Tooltip on hover */
@@ -180,7 +184,7 @@ body {
   font-family: var(--font);
 }
 .side-tab:hover .side-tab-close { display: flex; }
-.side-tab-close:hover { background: var(--red); color: #fff; border-color: var(--red); }
+.side-tab-close:hover { background: var(--green); color: #000; border-color: var(--green); }
 
 /* New tab button */
 .btn-new-tab {
@@ -256,7 +260,7 @@ body {
 
 .btn-launch {
   background: var(--accent);
-  color: #fff;
+  color: #000;
   border: none;
   padding: 10px 16px;
   border-radius: 8px;
@@ -288,6 +292,42 @@ body {
   gap: 6px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+
+.mission-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.mission-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  min-height: 46px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+.mission-card.attention { border-color: var(--green); background: var(--accent-dim); }
+
+.mission-label {
+  font-size: 9px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.mission-value {
+  font-size: 12px;
+  color: var(--text-0);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ─── Brand ─── */
@@ -377,6 +417,22 @@ button, input, .session-row, .project-row, .tool-card, .clip-item, .session-dele
   border-radius: 4px;
   text-transform: uppercase;
 }
+
+.state-pill {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+.tone-green { color: var(--green); }
+.tone-yellow { color: var(--green); }
+.tone-red { color: #ffffff; }
+.tone-muted { color: var(--text-2); }
+.state-pill.tone-green { background: #22c55e16; }
+.state-pill.tone-yellow { background: #22c55e16; }
+.state-pill.tone-red { background: #22c55e16; }
+.state-pill.tone-muted { background: var(--bg-3); }
 .session-resume {
   font-size: 10px;
   color: var(--accent);
@@ -397,7 +453,7 @@ button, input, .session-row, .project-row, .tool-card, .clip-item, .session-dele
   font-family: var(--font);
 }
 .session-row:hover .session-delete { opacity: 1; }
-.session-delete:hover { color: var(--red); }
+.session-delete:hover { color: var(--green); }
 
 .session-preview {
   font-size: 10px;
@@ -529,6 +585,37 @@ button, input, .session-row, .project-row, .tool-card, .clip-item, .session-dele
   flex-direction: column;
   gap: 10px;
 }
+
+.launch-option {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.launch-option input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+.launch-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.launch-option strong {
+  color: var(--text-0);
+  font-size: 11px;
+}
+.launch-option em {
+  color: var(--text-2);
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1.4;
+}
 .tool-card {
   display: flex;
   align-items: center;
@@ -603,6 +690,14 @@ button, input, .session-row, .project-row, .tool-card, .clip-item, .session-dele
   font-family: var(--font);
 }
 .titlebar-btn:hover { background: var(--bg-3); color: var(--text-0); }
+.cloud-btn {
+  border: 1px solid var(--border);
+  font-size: 10px;
+  padding: 4px 7px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+.cloud-btn:hover { border-color: var(--accent); }
 
 .tool-badge {
   font-size: 10px;
@@ -712,8 +807,9 @@ button, input, .session-row, .project-row, .tool-card, .clip-item, .session-dele
 .status-sep { color: var(--text-4); }
 .status-saved { color: var(--green); opacity: 0.5; }
 #status-project, #status-tool { color: var(--text-2); }
-#status-cmds, #status-clips { color: var(--text-2); }
+#status-cmds, #status-clips, #status-resource, #status-git { color: var(--text-2); }
 #status-elapsed { color: var(--text-3); }
+.status-health { font-weight: 700; }
 
 /* Drag overlay */
 .drag-overlay {

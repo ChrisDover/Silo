@@ -28,6 +28,12 @@ echo "  ✓ npm $(npm -v)"
 
 # 3. macOS: check Xcode CLI tools (needed for node-pty native compilation)
 if [ "$(uname)" = "Darwin" ]; then
+  ARCH=$(uname -m)
+  if [ "$ARCH" = "arm64" ]; then
+    echo "  ✓ Apple Silicon arm64 detected"
+  else
+    echo "  ! Intel/Rosetta detected. Silo is optimized for Apple Silicon arm64."
+  fi
   if ! xcode-select -p &>/dev/null; then
     echo "  ✗ Xcode Command Line Tools not installed."
     echo "    Run: xcode-select --install"
@@ -39,7 +45,11 @@ fi
 # 4. Install dependencies
 echo ""
 echo "  Installing dependencies..."
-npm install
+if [ -x /opt/homebrew/bin/python3.11 ]; then
+  PYTHON=/opt/homebrew/bin/python3.11 npm install
+else
+  npm install
+fi
 echo ""
 echo "  ✓ Dependencies installed"
 
@@ -55,6 +65,16 @@ if command -v codex &>/dev/null; then
   echo "    ✓ codex (Codex CLI)"
 else
   echo "    · codex — not found"
+fi
+if command -v ollama &>/dev/null; then
+  echo "    ✓ ollama (local Gemma supervisor)"
+  if ollama list 2>/dev/null | grep -qi "gemma4"; then
+    echo "    ✓ gemma4 model installed"
+  else
+    echo "    · gemma4 model not found — run: ollama pull gemma4"
+  fi
+else
+  echo "    · ollama — not found (install it for local-first supervision)"
 fi
 
 # 6. Done

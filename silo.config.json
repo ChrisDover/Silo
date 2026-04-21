@@ -1,5 +1,25 @@
 {
   "scanDirs": ["~/dev", "~/projects", "~/code"],
+  "localModel": {
+    "enabled": true,
+    "provider": "ollama",
+    "model": "gemma4",
+    "endpoint": "http://127.0.0.1:11434",
+    "role": "primary-supervisor",
+    "askBeforeCloudSpend": true,
+    "maxContextChars": 8000
+  },
+  "performance": {
+    "appleSiliconOptimized": true,
+    "resourceSampleMs": 3500,
+    "hotCpuPercent": 120,
+    "hotMemoryMb": 4096
+  },
+  "cloud": {
+    "dailyBudgetUsd": 5,
+    "defaultMode": "ask",
+    "escalationLevels": ["local-only", "cloud-assist", "cloud-agent", "cloud-review"]
+  },
   "pinned": [
     {
       "name": "example-web",
@@ -31,6 +51,13 @@
     }
   ],
   "tools": {
+    "gemma": {
+      "label": "Gemma Local",
+      "command": "ollama run gemma4",
+      "icon": "◆",
+      "color": "#60a5fa",
+      "description": "Local-first model for planning, summaries, and low-cost supervision"
+    },
     "claude": {
       "label": "Claude Code",
       "command": "claude",

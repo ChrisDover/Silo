@@ -1,13 +1,17 @@
 // Silo — Main Process
 // Single-window orchestrator: side tabs, background PTYs, session persistence
 
-const { app, BrowserWindow, ipcMain, dialog, session } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, session, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 const pty = require("node-pty");
 const Store = require("electron-store");
+const { samplePid } = require("./resource-monitor");
+const supervisor = require("./supervisor");
+const gitState = require("./git-state");
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -65,6 +69,70 @@ function validateSessionId(id) {
 
 function sanitizeFilename(name) {
   return String(name).replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+function safeBranchName(name) {
+  return String(name)
+    .replace(/[^a-zA-Z0-9._/-]/g, "-")
+    .replace(/\.\./g, "-")
+    .replace(/^[-/.]+|[-/.]+$/g, "")
+    .slice(0, 80) || "silo-worktree";
+}
+
+function createGitWorktree(project, sessionId) {
+  const sourcePath = sanitizePath(project.path);
+  const projectName = sanitizeFilename(project.name || path.basename(sourcePath)) || "project";
+  const worktreePath = path.join(os.homedir(), ".silo", "worktrees", `${projectName}-${sessionId}`);
+  const safeWorktreePath = sanitizePath(worktreePath);
+  const branch = safeBranchName(`silo/${projectName}-${sessionId.slice(0, 8)}`);
+
+  fs.mkdirSync(path.dirname(safeWorktreePath), { recursive: true });
+
+  try {
+    execFileSync("git", ["-C", sourcePath, "rev-parse", "--is-inside-work-tree"], {
+      stdio: "ignore",
+      timeout: 3000,
+    });
+    execFileSync("git", ["-C", sourcePath, "worktree", "add", "-b", branch, safeWorktreePath, "HEAD"], {
+      stdio: "ignore",
+      timeout: 30000,
+    });
+    return {
+      enabled: true,
+      path: safeWorktreePath,
+      sourcePath,
+      branch,
+      error: null,
+    };
+  } catch (err) {
+    return {
+      enabled: false,
+      path: sourcePath,
+      sourcePath,
+      branch: null,
+      error: err.message || "Unable to create git worktree",
+    };
+  }
+}
+
+function getSessionOrThrow(id) {
+  validateSessionId(id);
+  const all = store.get("sessions", {});
+  const sess = all[id];
+  if (!sess) throw new Error("Session not found");
+  return { all, sess };
+}
+
+function assertSessionWorktree(sess) {
+  if (!sess.worktree || !sess.worktree.enabled || !sess.worktree.path) {
+    throw new Error("Session is not using an isolated worktree");
+  }
+  const wtPath = sanitizePath(sess.worktree.path);
+  const root = sanitizePath(path.join(os.homedir(), ".silo", "worktrees"));
+  if (!wtPath.startsWith(root + path.sep)) {
+    throw new Error("Worktree path is outside Silo worktree root");
+  }
+  return wtPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +254,9 @@ const store = new Store({
 let mainWindow = null;
 const sessionPtys = new Map();       // sessionId -> pty process
 const sessionScrollback = new Map(); // sessionId -> string (main-process buffer)
+const sessionRuntime = new Map();    // sessionId -> runtime health data
 let activeTabId = null;              // which session the renderer is currently showing
+let monitorTimer = null;
 
 // ---------------------------------------------------------------------------
 // PTY helpers
@@ -197,6 +267,8 @@ function buildPtyEnv() {
   env.TERM = "xterm-256color";
   env.COLORTERM = "truecolor";
   env.SILO = "1";
+  env.SILO_APPLE_SILICON = process.platform === "darwin" && process.arch === "arm64" ? "1" : "0";
+  env.OLLAMA_FLASH_ATTENTION = env.OLLAMA_FLASH_ATTENTION || "1";
   return env;
 }
 
@@ -220,6 +292,20 @@ function spawnPty(sessionId, projectPath, toolKey, projectName) {
 
   sessionPtys.set(sessionId, ptyProc);
   sessionScrollback.set(sessionId, "");
+  sessionRuntime.set(sessionId, {
+    pid: ptyProc.pid,
+    startedAt: Date.now(),
+    lastOutputAt: Date.now(),
+    exited: false,
+    exitCode: null,
+    resource: { cpu: 0, memMb: 0, state: "new" },
+    health: {
+      state: "running",
+      reason: "The session started.",
+      action: "Watch",
+      risk: "low",
+    },
+  });
 
   // cd into project directory after shell profile loads
   setTimeout(() => {
@@ -249,6 +335,11 @@ function spawnPty(sessionId, projectPath, toolKey, projectName) {
   ptyProc.onData((data) => {
     const prev = sessionScrollback.get(sessionId) || "";
     sessionScrollback.set(sessionId, (prev + data).slice(-SCROLLBACK_CAP));
+    const runtime = sessionRuntime.get(sessionId);
+    if (runtime) {
+      runtime.lastOutputAt = Date.now();
+      runtime.exited = false;
+    }
 
     if (mainWindow && !mainWindow.isDestroyed() && activeTabId === sessionId) {
       mainWindow.webContents.send("pty:data", sessionId, data);
@@ -256,8 +347,20 @@ function spawnPty(sessionId, projectPath, toolKey, projectName) {
   });
 
   ptyProc.onExit(({ exitCode }) => {
+    const runtime = sessionRuntime.get(sessionId);
+    if (runtime) {
+      runtime.exited = true;
+      runtime.exitCode = exitCode;
+      runtime.health = {
+        state: "dead",
+        reason: "The process exited.",
+        action: "Restart",
+        risk: "low",
+      };
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("pty:exit", sessionId, exitCode);
+      mainWindow.webContents.send("session:status", sessionId, getSessionStatus(sessionId));
     }
     sessionPtys.delete(sessionId);
   });
@@ -271,6 +374,73 @@ function killPty(sessionId) {
     try { p.kill(); } catch (_) {}
     sessionPtys.delete(sessionId);
   }
+  const runtime = sessionRuntime.get(sessionId);
+  if (runtime) {
+    runtime.exited = true;
+    runtime.health = {
+      state: "dead",
+      reason: "The process was stopped.",
+      action: "Restart",
+      risk: "low",
+    };
+  }
+}
+
+function getSessionStatus(sessionId) {
+  const runtime = sessionRuntime.get(sessionId) || {};
+  const health = runtime.health || {
+    state: sessionPtys.has(sessionId) ? "running" : "idle",
+    reason: sessionPtys.has(sessionId) ? "The session is active." : "The session is not running.",
+    action: sessionPtys.has(sessionId) ? "Watch" : "Resume",
+    risk: "low",
+  };
+  return {
+    id: sessionId,
+    running: sessionPtys.has(sessionId),
+    pid: runtime.pid || null,
+    startedAt: runtime.startedAt || null,
+    lastOutputAt: runtime.lastOutputAt || null,
+    exited: Boolean(runtime.exited),
+    exitCode: runtime.exitCode ?? null,
+    resource: runtime.resource || { cpu: 0, memMb: 0, state: "unknown" },
+    git: runtime.git || null,
+    health: {
+      ...health,
+      resource: runtime.resource || { cpu: 0, memMb: 0, state: "unknown" },
+      git: runtime.git || null,
+    },
+  };
+}
+
+async function refreshSessionStatuses() {
+  const all = store.get("sessions", {});
+  for (const [id, ptyProc] of sessionPtys) {
+    const sess = all[id];
+    const runtime = sessionRuntime.get(id) || {};
+    const resource = await samplePid(ptyProc.pid);
+    const git = sess ? await gitState.getGitSummary(sess.project.path) : null;
+    runtime.pid = ptyProc.pid;
+    runtime.resource = resource;
+    runtime.git = git;
+    runtime.health = supervisor.classifySession({
+      exited: runtime.exited || resource.state === "dead",
+      lastOutputAt: runtime.lastOutputAt,
+      scrollback: sessionScrollback.get(id) || (sess && sess.scrollback) || "",
+      resource,
+      git,
+    });
+    sessionRuntime.set(id, runtime);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("session:status", id, getSessionStatus(id));
+    }
+  }
+}
+
+function startResourceMonitor() {
+  if (monitorTimer) return;
+  monitorTimer = setInterval(() => {
+    refreshSessionStatuses().catch((err) => console.error("status refresh failed", err));
+  }, 3500);
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +521,7 @@ function createMainWindow() {
   mainWindow.on("closed", () => {
     for (const [id] of sessionPtys) killPty(id);
     sessionScrollback.clear();
+    sessionRuntime.clear();
     mainWindow = null;
     activeTabId = null;
   });
@@ -405,6 +576,9 @@ function scanProjects() {
 ipcMain.handle("config:get", () => ({
   tools: config.tools,
   terminal: config.terminal,
+  localModel: config.localModel || {},
+  cloud: config.cloud || {},
+  performance: config.performance || {},
 }));
 
 ipcMain.handle("config:scanProjects", () => scanProjects());
@@ -473,9 +647,11 @@ ipcMain.handle("session:list", () => {
       const lines = clean.split("\n").map((l) => l.trim()).filter((l) => l.length > 2);
       preview = (lines[lines.length - 1] || "").slice(0, 120);
     }
+    const status = getSessionStatus(s.id);
     return {
       id: s.id,
       project: s.project,
+      worktree: s.worktree || null,
       tool: s.tool,
       label: s.label || "",
       t0: s.t0,
@@ -484,6 +660,9 @@ ipcMain.handle("session:list", () => {
       histCount: (s.history || []).length,
       savedAt: s.savedAt,
       preview,
+      status,
+      cloudTokens: s.cloudTokens || 0,
+      cloudCents: s.cloudCents || 0,
     };
   });
 });
@@ -540,18 +719,22 @@ ipcMain.handle("session:delete", (_e, id) => {
   return true;
 });
 
-ipcMain.handle("session:create", (_e, { project, tool }) => {
+ipcMain.handle("session:create", (_e, { project, tool, worktree }) => {
   const id = crypto.randomBytes(8).toString("hex");
   const toolConfig = config.tools[tool];
   if (!toolConfig) throw new Error(`Unknown tool: ${tool}`);
+  const worktreeInfo = worktree ? createGitWorktree(project, id) : null;
+  const launchPath = worktreeInfo ? worktreeInfo.path : project.path;
 
   const sess = {
     id,
     project: {
       name: String(project.name).slice(0, 100),
-      path: project.path,
+      path: launchPath,
+      sourcePath: worktreeInfo ? worktreeInfo.sourcePath : project.path,
       icon: String(project.icon || "").slice(0, 4),
     },
+    worktree: worktreeInfo,
     tool,
     t0: Date.now(),
     cmds: 0,
@@ -565,7 +748,7 @@ ipcMain.handle("session:create", (_e, { project, tool }) => {
   all[id] = sess;
   store.set("sessions", all);
 
-  spawnPty(id, project.path, tool, project.name);
+  spawnPty(id, launchPath, tool, project.name);
 
   return sess;
 });
@@ -648,6 +831,132 @@ ipcMain.handle("tab:listActive", () => {
   return Array.from(sessionPtys.keys());
 });
 
+ipcMain.handle("status:list", () => {
+  const all = store.get("sessions", {});
+  return Object.keys(all).map((id) => getSessionStatus(id));
+});
+
+ipcMain.handle("git:summary", async (_e, id) => {
+  validateSessionId(id);
+  const all = store.get("sessions", {});
+  const sess = all[id];
+  if (!sess) throw new Error("Session not found");
+  return gitState.getGitSummary(sess.project.path);
+});
+
+ipcMain.handle("git:diffPreview", async (_e, id) => {
+  validateSessionId(id);
+  const all = store.get("sessions", {});
+  const sess = all[id];
+  if (!sess) throw new Error("Session not found");
+  return gitState.getDiffPreview(sess.project.path);
+});
+
+ipcMain.handle("worktree:open", async (_e, id) => {
+  const { sess } = getSessionOrThrow(id);
+  const wtPath = assertSessionWorktree(sess);
+  await shell.openPath(wtPath);
+  return true;
+});
+
+ipcMain.handle("worktree:keep", (_e, id) => {
+  const { all, sess } = getSessionOrThrow(id);
+  assertSessionWorktree(sess);
+  sess.worktree.kept = true;
+  sess.worktree.keptAt = Date.now();
+  sess.savedAt = Date.now();
+  all[id] = sess;
+  store.set("sessions", all);
+  return sess.worktree;
+});
+
+ipcMain.handle("worktree:delete", (_e, id) => {
+  const { all, sess } = getSessionOrThrow(id);
+  const wtPath = assertSessionWorktree(sess);
+  killPty(id);
+
+  try {
+    execFileSync("git", ["-C", sess.worktree.sourcePath || sess.project.sourcePath, "worktree", "remove", wtPath], {
+      stdio: "ignore",
+      timeout: 30000,
+    });
+  } catch (err) {
+    throw new Error(`Unable to remove worktree. Commit, stash, or clean changes first. ${err.message}`);
+  }
+
+  sess.worktree.enabled = false;
+  sess.worktree.deleted = true;
+  sess.worktree.deletedAt = Date.now();
+  sess.project.path = sess.worktree.sourcePath || sess.project.sourcePath || sess.project.path;
+  sess.savedAt = Date.now();
+  all[id] = sess;
+  store.set("sessions", all);
+  return sess.worktree;
+});
+
+ipcMain.handle("worktree:merge", async (_e, id) => {
+  const { all, sess } = getSessionOrThrow(id);
+  const wtPath = assertSessionWorktree(sess);
+  const sourcePath = sanitizePath(sess.worktree.sourcePath || sess.project.sourcePath);
+  const sourceGit = await gitState.getGitSummary(sourcePath);
+  if (sourceGit.ok && sourceGit.changed > 0) {
+    throw new Error(`Source checkout is not clean: ${sourceGit.summary}`);
+  }
+
+  const branch = sess.worktree.branch;
+  if (!branch) throw new Error("Worktree branch is unknown");
+
+  try {
+    execFileSync("git", ["-C", wtPath, "status", "--short"], { stdio: "ignore", timeout: 5000 });
+    execFileSync("git", ["-C", sourcePath, "merge", "--no-ff", branch], {
+      stdio: "ignore",
+      timeout: 60000,
+    });
+  } catch (err) {
+    throw new Error(`Merge failed. Resolve manually in the source checkout. ${err.message}`);
+  }
+
+  sess.worktree.merged = true;
+  sess.worktree.mergedAt = Date.now();
+  sess.savedAt = Date.now();
+  all[id] = sess;
+  store.set("sessions", all);
+  return {
+    merged: true,
+    sourcePath,
+    branch,
+    mergedAt: sess.worktree.mergedAt,
+  };
+});
+
+ipcMain.handle("supervisor:doctor", async (_e, id) => {
+  validateSessionId(id);
+  const all = store.get("sessions", {});
+  const sess = all[id];
+  if (!sess) throw new Error("Session not found");
+  const health = getSessionStatus(id).health;
+  return supervisor.doctor({
+    session: sess,
+    health,
+    scrollback: sessionScrollback.get(id) || sess.scrollback || "",
+    localModel: config.localModel || {},
+  });
+});
+
+ipcMain.handle("supervisor:contextPacket", async (_e, id, budget) => {
+  validateSessionId(id);
+  const all = store.get("sessions", {});
+  const sess = all[id];
+  if (!sess) throw new Error("Session not found");
+  return supervisor.buildContextPacket({
+    session: sess,
+    health: getSessionStatus(id).health,
+    scrollback: sessionScrollback.get(id) || sess.scrollback || "",
+    git: await gitState.getGitSummary(sess.project.path),
+    budget,
+  });
+});
+
 // Synchronous save from renderer's beforeunload
 ipcMain.on("session:saveSync", (e, id, data) => {
   try {
@@ -686,6 +995,11 @@ ipcMain.handle("pty:restart", (_e, sessionId, toolKey) => {
   const sess = all[sessionId];
   if (!sess) throw new Error("Session not found");
 
+  sess.tool = toolKey;
+  sess.savedAt = Date.now();
+  all[sessionId] = sess;
+  store.set("sessions", all);
+
   spawnPty(sessionId, sess.project.path, toolKey, sess.project.name);
   return true;
 });
@@ -713,10 +1027,12 @@ app.whenReady().then(() => {
   });
 
   createMainWindow();
+  startResourceMonitor();
 });
 
 app.on("before-quit", () => {
   flushAllSessions();
+  if (monitorTimer) clearInterval(monitorTimer);
 });
 
 app.on("window-all-closed", () => {

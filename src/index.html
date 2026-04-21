@@ -53,7 +53,12 @@
           </div>
 
           <div class="home-section">
-            <div class="home-section-title">PREVIOUS SESSIONS</div>
+            <div class="home-section-title">MISSION CONTROL</div>
+            <div id="mission-summary" class="mission-summary"></div>
+          </div>
+
+          <div class="home-section">
+            <div class="home-section-title">SESSIONS</div>
             <div id="manager-search-wrap" class="search-wrap hidden">
               <input id="manager-search" type="text" class="search-input" placeholder="Filter sessions...">
             </div>
@@ -100,6 +105,13 @@
             </div>
           </div>
           <div id="tool-list" class="tool-list"></div>
+          <label class="launch-option">
+            <input id="launch-worktree" type="checkbox">
+            <span>
+              <strong>Isolated worktree</strong>
+              <em>Launch in ~/.silo/worktrees so cloud agents do not touch the main checkout</em>
+            </span>
+          </label>
         </div>
       </div>
 
@@ -113,6 +125,15 @@
           </div>
           <div class="terminal-header-right">
             <button id="btn-restart" class="titlebar-btn" title="Restart PTY">↻</button>
+            <button id="btn-doctor" class="titlebar-btn" title="Ask local Gemma supervisor">◇</button>
+            <button id="btn-review-diff" class="titlebar-btn cloud-btn" title="Review git diff">Diff</button>
+            <button id="btn-open-worktree" class="titlebar-btn cloud-btn wt-action hidden" title="Open isolated worktree">Open WT</button>
+            <button id="btn-merge-worktree" class="titlebar-btn cloud-btn wt-action hidden" title="Merge isolated worktree into source checkout">Merge WT</button>
+            <button id="btn-keep-worktree" class="titlebar-btn cloud-btn wt-action hidden" title="Mark worktree to keep">Keep WT</button>
+            <button id="btn-delete-worktree" class="titlebar-btn cloud-btn wt-action hidden" title="Delete isolated worktree">Delete WT</button>
+            <button id="btn-context-packet" class="titlebar-btn" title="Copy cloud escalation context">⧉</button>
+            <button id="btn-send-codex" class="titlebar-btn cloud-btn" title="Send context to Codex">Codex</button>
+            <button id="btn-send-claude" class="titlebar-btn cloud-btn" title="Send context to Claude Code">Claude</button>
             <button id="btn-export" class="titlebar-btn" title="Export session">↓</button>
             <button id="btn-clipboard-toggle" class="titlebar-btn" title="Toggle clipboard rail">📋</button>
           </div>
@@ -121,7 +142,7 @@
           <div id="terminal-container" class="terminal-container"></div>
           <div id="clipboard-rail" class="clipboard-rail hidden">
             <div class="rail-header">
-              <span class="rail-title">CLIPBOARD</span>
+              <span class="rail-title">CONTEXT VAULT</span>
               <span id="clip-count" class="rail-count">0</span>
             </div>
             <div id="clip-items" class="clip-items"></div>
@@ -142,9 +163,15 @@
             <span class="status-sep">·</span>
             <span id="status-cmds">0 cmds</span>
             <span class="status-sep">·</span>
-            <span id="status-clips">0 clips</span>
-          </div>
-          <div class="status-right">
+              <span id="status-clips">0 clips</span>
+              <span class="status-sep">·</span>
+              <span id="status-health">running</span>
+              <span class="status-sep">·</span>
+              <span id="status-git">git clean</span>
+            </div>
+            <div class="status-right">
+            <span id="status-resource">CPU 0% · MEM 0MB</span>
+            <span class="status-sep">·</span>
             <span id="status-saved" class="status-saved">saved</span>
             <span class="status-sep">·</span>
             <span id="status-elapsed">0:00</span>

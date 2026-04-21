@@ -31,6 +31,22 @@ contextBridge.exposeInMainWorld("silo", {
   closeTab: (id) => ipcRenderer.invoke("tab:close", id),
   listActiveTabs: () => ipcRenderer.invoke("tab:listActive"),
 
+  // Local supervisor / Mission Control
+  listStatuses: () => ipcRenderer.invoke("status:list"),
+  askDoctor: (id) => ipcRenderer.invoke("supervisor:doctor", id),
+  buildContextPacket: (id, budget) => ipcRenderer.invoke("supervisor:contextPacket", id, budget),
+  getGitSummary: (id) => ipcRenderer.invoke("git:summary", id),
+  getDiffPreview: (id) => ipcRenderer.invoke("git:diffPreview", id),
+  openWorktree: (id) => ipcRenderer.invoke("worktree:open", id),
+  keepWorktree: (id) => ipcRenderer.invoke("worktree:keep", id),
+  deleteWorktree: (id) => ipcRenderer.invoke("worktree:delete", id),
+  mergeWorktree: (id) => ipcRenderer.invoke("worktree:merge", id),
+  onSessionStatus: (cb) => {
+    const handler = (_e, sessionId, status) => cb(sessionId, status);
+    ipcRenderer.on("session:status", handler);
+    return () => ipcRenderer.removeListener("session:status", handler);
+  },
+
   // PTY — explicit sessionId
   writePty: (sessionId, data) => ipcRenderer.send("pty:write", sessionId, data),
   resizePty: (sessionId, size) => ipcRenderer.send("pty:resize", sessionId, size),

@@ -4,9 +4,33 @@
 
 ## Project Summary
 
-Silo is an Electron-based terminal emulator purpose-built for AI coding workflows. Each window is locked to one project and one AI tool (Claude Code, Codex CLI, or any CLI tool). Sessions persist across restarts — scrollback, clipboard history, command history all survive. Designed to run 12+ instances simultaneously with minimal resource usage.
+Silo is a local-first AI agent control room for running and supervising many agent sessions on one Mac. Each session is locked to one project, one tool, and optionally one isolated git worktree. Sessions persist across restarts, and Silo keeps the practical operator state visible: what is running, what is blocked, what is dead, what is using resources, what has changed, and what needs human review.
 
-**Core thesis:** AI coding sessions need session isolation (no cross-project drift), zero-cost restarts (close/reboot/resume without losing state), and clipboard as a first-class data bus (every paste and file drop tracked with token counts).
+Gemma through Ollama is the default always-on local orchestrator. It is used for cheap supervision, status classification, blocker summaries, and routine handoff preparation. Claude Code, Codex CLI, and other cloud agents remain escalation paths when the work needs stronger reasoning, live file edits, tests, commits, or final review.
+
+**Core thesis:** people operating AI agent companies do not need more terminal panes. They need an operations cockpit that makes parallel agent work legible and controllable: live sessions, dead sessions, blocked sessions, resource burn, token/context pressure, review-ready diffs, and conservative merge controls.
+
+## Product Model
+
+Silo is the operator console. A revenue workflow such as `_MAKO` can be one agent-operated company running through it. Silo itself manages:
+
+- project-locked agent sessions
+- local Gemma supervision
+- cloud escalation handoffs
+- context vault inputs and token estimates
+- per-session CPU and memory visibility
+- git worktree isolation
+- diff/review/merge controls
+- persistent crash and runtime logs
+
+The UX should stay operational rather than developer-theatrical. A non-expert operator should be able to answer:
+
+- What is running?
+- What is dead?
+- What is blocked?
+- What should happen next?
+- What is consuming resources or cloud budget?
+- Which worktree can be reviewed, kept, deleted, or merged?
 
 ## Tech Stack
 

@@ -6,6 +6,20 @@ Silo is an Electron-based control room for AI coding workflows. It is optimized 
 
 **Core thesis:** vibe coders do not need more terminal panes. They need to know what is running, what is blocked, what is dead, what is using resources, what is spending cloud tokens, and what to do next.
 
+## Product Positioning
+
+Silo is the operator console for an AI-agent-operated company. The local Gemma model is the always-on orchestrator: it watches agent sessions, summarizes status, classifies blockers, and decides when a task should stay local or escalate to a cloud agent.
+
+The product is intentionally not a full developer IDE. Its job is to make parallel agent work legible:
+
+- **What is running?** Active sessions, child processes, and project/worktree ownership.
+- **What is dead?** Crashed renderers, failed PTYs, stopped agents, and sessions with no useful activity.
+- **What is blocked?** Agent prompts waiting for input, merge conflicts, dirty source checkouts, missing credentials, failed commands, or unclear next steps.
+- **What is expensive?** Cloud escalations, token-heavy context, runaway processes, and resource-heavy sessions.
+- **What can ship?** Worktrees with clean diffs, review-ready changes, and conservative merge controls.
+
+In that stack, Silo is the control room. A business workflow such as `_MAKO` can be one revenue-seeking agent company running through it; Silo itself manages the agents, supervision, context, resource limits, and handoffs.
+
 ## What Silo Does
 
 - Runs many project-locked AI CLI sessions in one lightweight desktop app
